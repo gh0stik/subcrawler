@@ -12,7 +12,7 @@ SubCrawler is a simple application that allows you to collect all available subd
 
 ## Structure
 ```
-sub_crawler
+subcrawler
     ├── Dockerfile
     ├── README.md
     ├── app.py
@@ -33,8 +33,8 @@ sub_crawler
 ## Installation
 1. Clone the Repository:
 ```aiignore
-git clone <repo>
-cd /sub_crawler
+git clone https://github.com/gh0stik/subcrawler.git
+cd /subcrawler
 ```
 2. Spin up the environment:
 ```aiignore

@@ -8,7 +8,7 @@ import re
 from flask import Flask, render_template, request, redirect, url_for, flash
 
 app = Flask(__name__)
-app.secret_key = "change-this-secret-key"
+app.secret_key = "VeRy$eCretKeyy"
 redis_host = os.getenv("REDIS_HOST", "redis")
 csv_path = "/app/csv_db/"
 r = redis.StrictRedis(host=redis_host, port=6379, decode_responses=True)
