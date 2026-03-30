@@ -11,17 +11,20 @@ SubCrawler is a simple application that allows you to collect all available subd
 - **Dockerized:** Easily containerized for streamlined deployment.
 
 ## Structure
-
-├── Dockerfile<br>
-├── README.md<br>
-├── app.py<br>
-├── csv_db<br>
-│&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└── domain_results.csv<br>
-├── docker-compose.yml<br>
-├── requirements.txt<br>
-└── templates<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└── index.html<br>
-
+```
+sub_crawler
+    ├── Dockerfile
+    ├── README.md
+    ├── app.py
+    ├── csv_db
+    │   └── domain_results.csv
+    ├── docker-compose.yml
+    ├── requirements.txt
+    ├── static
+    │   └── example.png
+    └── templates
+        └── index.html
+```
 ## Prerequisites
 
 [Docker](https://docs.docker.com/get-docker/) <br>
