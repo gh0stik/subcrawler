@@ -1,5 +1,5 @@
 FROM python:3.10.19-alpine
-LABEL authors="NicolaiPutintsev"
+LABEL authors="Nico"
 
 WORKDIR /app
 
