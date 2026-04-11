@@ -5,7 +5,7 @@ import redis
 import requests
 import os
 import re
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, abort
 
 app = Flask(__name__)
 app.secret_key = "VeRy$eCretKeyy"
@@ -147,6 +147,29 @@ def index():
         submitted_domain=submitted_domain,
         cached=cached,
     )
+
+@app.route("/health", methods=["GET"])
+def health():
+    health_status = {"redis": "Unhealthy", "app": "Unhealthy"}
+    try:
+        if r.ping():
+            health_status["redis"] = "Healthy"
+    except:
+        pass
+    try:
+        if s.get("http://localhost:5000").status_code == 200:
+            health_status["app"] = "Healthy"
+    except:
+        pass
+    return health_status
+
+@app.route("/shutdown", methods=["GET"])
+def shutdown():
+    func = request.environ.get("werkzeug.server.shutdown")
+    if func is None:
+        raise RuntimeError("Not running with the Werkzeug Server")
+    func()
+    return "Server shutting down..."
 
 if __name__ == "__main__":
     create_if_not_exist()
