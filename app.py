@@ -8,7 +8,16 @@ import re
 from flask import Flask, render_template, request, redirect, url_for, flash, abort
 
 app = Flask(__name__)
-app.secret_key = "VeRy$eCretKeyy"
+
+def load_key():
+    secret_path = "/etc/app-seckey/.secret-key"
+    if os.path.exists(secret_path):
+        with open(secret_path, "r") as f:
+            return f.read().strip()
+    return None
+api_token = load_key()
+
+app.secret_key = api_token
 redis_host = os.getenv("REDIS_HOST", "redis")
 csv_path = "/app/csv_db/"
 r = redis.StrictRedis(host=redis_host, port=6379, decode_responses=True)
@@ -150,28 +159,19 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    health_status = {"redis": "Unhealthy", "app": "Unhealthy"}
+    health_status = {"redis": "Unhealthy", "app": "Healthy"}
     try:
         if r.ping():
             health_status["redis"] = "Healthy"
     except:
         pass
-    try:
-        if s.get("http://localhost:5000").status_code == 200:
-            health_status["app"] = "Healthy"
-    except:
-        pass
-    return health_status
+    return health_status, 200
 
 @app.route("/shutdown", methods=["GET"])
 def shutdown():
-    func = request.environ.get("werkzeug.server.shutdown")
-    if func is None:
-        raise RuntimeError("Not running with the Werkzeug Server")
-    func()
-    return "Server shutting down..."
+    os._exit(1)
 
 if __name__ == "__main__":
     create_if_not_exist()
     csv_to_redis_init()
-    app.run("0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

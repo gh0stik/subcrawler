@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: copycsv
+  namespace: application
+spec:
+  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: 2
+  schedule: "*/5 * * * *"
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 30
+      template:
+        spec:
+          containers:
+          - name: copycsv
+            image: busybox
+            imagePullPolicy: IfNotPresent
+            command:
+              - /bin/sh
+              - -c
+              - mkdir -p /app/csv_db/archive-$(date +%d-%m-%Y) && cp /app/csv_db/domain_results.csv /app/csv_db/archive-$(date +%d-%m-%Y)/
+            volumeMounts:
+              - name: csv-pv
+                mountPath: /app/csv_db
+          volumes:
+            - name: csv-pv
+              persistentVolumeClaim:
+                claimName: csv-pv-claim
+          restartPolicy: Never

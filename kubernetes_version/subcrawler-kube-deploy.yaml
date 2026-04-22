@@ -1,0 +1,230 @@
+# 1. Create a namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: application
+---
+# 2. Create a configmap with the redis env variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-envs
+  namespace: application
+data:
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+---
+# 3. Create a PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: csv-pv
+spec:
+  storageClassName: csv-path
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /app/csv_db
+---
+# 4. Create a PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: csv-pv-claim
+  namespace: application
+spec:
+  storageClassName: csv-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# 5. Create redis deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: application
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.6-alpine
+---
+# 6. Create application deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subcrawler
+  namespace: application
+  labels:
+    app: subcrawler
+spec:
+  selector:
+    matchLabels:
+      app: subcrawler
+  template:
+    metadata:
+      labels:
+        app: subcrawler
+    spec:
+      containers:
+      - name: subcrawler
+        image: gh0stik/subcrawler:1.0
+        imagePullPolicy: Always
+        ports:
+          - containerPort: 5000
+        env:
+          - name: REDIS_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: redis-envs
+                key: REDIS_HOST
+          - name: REDIS_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: redis-envs
+                key: REDIS_PORT
+        volumeMounts:
+          - name: csv-pv
+            mountPath: /app/csv_db
+          - name: app-seckey
+            readOnly: true
+            mountPath: /etc/app-seckey
+        resources:
+          requests:
+            cpu: 100m
+          limits:
+            cpu: 200m
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 6
+      volumes:
+        - name: csv-pv
+          persistentVolumeClaim:
+            claimName: csv-pv-claim
+        - name: app-seckey
+          secret:
+            secretName: subcrawler-secret-key
+---
+# 7. Create redis service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: application
+spec:
+  selector:
+    app: redis
+  ports:
+    - protocol: TCP
+      port: 6379
+      targetPort: 6379
+---
+# 8. Create application service
+apiVersion: v1
+kind: Service
+metadata:
+  name: subcrawler
+  namespace: application
+spec:
+  selector:
+    app: subcrawler
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+---
+# 9. Create HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: subcrawler
+  namespace: application
+spec:
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - resource:
+      name: cpu
+      target:
+        averageUtilization: 80
+        type: Utilization
+    type: Resource
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: subcrawler
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+---
+# 10. Create CronJob to copy csv file
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: copycsv
+  namespace: application
+spec:
+  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: 2
+  schedule: "*/5 * * * *"
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 30
+      template:
+        spec:
+          containers:
+          - name: copycsv
+            image: busybox
+            imagePullPolicy: IfNotPresent
+            command:
+              - /bin/sh
+              - -c
+              - mkdir -p /app/csv_db/archive-$(date +%d-%m-%Y) && cp /app/csv_db/domain_results.csv /app/csv_db/archive-$(date +%d-%m-%Y)/
+            volumeMounts:
+              - name: csv-pv
+                mountPath: /app/csv_db
+          volumes:
+            - name: csv-pv
+              persistentVolumeClaim:
+                claimName: csv-pv-claim
+          restartPolicy: Never
+---
+# 11. Secret for the app secret key
+apiVersion: v1
+kind: Secret
+metadata:
+  name: subcrawler-secret-key
+  namespace: application
+data:
+  .secret-key: VmVSeSRlQ3JldEtleXk=

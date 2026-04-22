@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: subcrawler
+  namespace: application
+spec:
+  selector:
+    app: subcrawler
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000

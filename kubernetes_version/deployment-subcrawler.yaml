@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subcrawler
+  namespace: application
+  labels:
+    app: subcrawler
+spec:
+  selector:
+    matchLabels:
+      app: subcrawler
+  template:
+    metadata:
+      labels:
+        app: subcrawler
+    spec:
+      containers:
+      - name: subcrawler
+        image: gh0stik/subcrawler:1.0
+        imagePullPolicy: Always
+        ports:
+          - containerPort: 5000
+        env:
+          - name: REDIS_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: redis-envs
+                key: REDIS_HOST
+          - name: REDIS_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: redis-envs
+                key: REDIS_PORT
+        volumeMounts:
+          - name: csv-pv
+            mountPath: /app/csv_db
+          - name: app-seckey
+            readOnly: true
+            mountPath: /etc/app-seckey
+        resources:
+          requests:
+            cpu: 100m
+          limits:
+            cpu: 200m
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 6
+      volumes:
+        - name: csv-pv
+          persistentVolumeClaim:
+            claimName: csv-pv-claim
+        - name: app-seckey
+          secret:
+            secretName: subcrawler-secret-key
