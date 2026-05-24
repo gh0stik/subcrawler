@@ -5,16 +5,48 @@ import redis
 import requests
 import os
 import re
-from flask import Flask, render_template, request, redirect, url_for, flash, abort
+import socket
+import concurrent.futures
+import io
+from flask import Flask, render_template, request, redirect, url_for, flash, abort, make_response
 
 app = Flask(__name__)
+
+def _resolve_single(host: str) -> dict:
+    try:
+        ip = socket.gethostbyname(host)
+    except Exception:
+        ip = "unresolvable"
+    return {"host": host, "ip": ip}
+
+def resolve_hostnames(domains, max_workers: int = 20):
+    """
+    Resolve many hostnames concurrently.
+
+    domains: iterable of hostnames
+    returns: list[{"host": ..., "ip": ...}]
+    """
+    hosts = sorted(set(domains))  # still dedupe + sort
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all lookups at once
+        future_to_host = {executor.submit(_resolve_single, h): h for h in hosts}
+
+        # Collect as they finish (order doesn’t matter here)
+        for future in concurrent.futures.as_completed(future_to_host):
+            result = future.result()
+            results.append(result)
+
+    # Keep final list sorted by hostname for stable UI/CSV/Redis
+    return sorted(results, key=lambda x: x["host"])
 
 def load_key():
     secret_path = "/etc/app-seckey/.secret-key"
     if os.path.exists(secret_path):
         with open(secret_path, "r") as f:
             return f.read().strip()
-    return None
+    return os.urandom(32)
 api_token = load_key()
 
 app.secret_key = api_token
@@ -88,10 +120,31 @@ def parse_results(json_results: str, base_domain: str):
     return domains
 
 def write_to_redis(domain, crawl_results):
-    r.sadd(domain, *crawl_results)
+    """
+    crawl_results: list of {"host": ..., "ip": ...}
+    Store each as a JSON string in a Redis set keyed by the submitted domain.
+    """
+    if not crawl_results:
+        return
+    payloads = [json.dumps(entry, sort_keys=True) for entry in crawl_results]
+    r.sadd(domain, *payloads)
 
 def get_from_redis(domain):
-    return r.smembers(domain)
+    """
+    Return list[{"host": ..., "ip": ...}] for a submitted domain.
+    Assumes each set member is a JSON object with 'host' and 'ip'.
+    """
+    members = r.smembers(domain)
+    results = []
+    for m in members:
+        try:
+            obj = json.loads(m)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "host" in obj and "ip" in obj:
+            results.append(obj)
+    return sorted(results, key=lambda x: x["host"])
+
 
 def csv_to_redis_init():
     print("Initializing Redis and appending crawl results...")
@@ -99,12 +152,22 @@ def csv_to_redis_init():
         reader = csv.reader(csv_read)
         for row in reader:
             if row:
-                write_to_redis(row[0], json.loads(row[1]))
+                domain = row[0]
+                try:
+                    data = json.loads(row[1])
+                except json.JSONDecodeError:
+                    continue
+                # data is expected to be list[{"host": ..., "ip": ...}]
+                write_to_redis(domain, data)
 
 def append_to_csv(domain, crawl_results):
+    """
+    crawl_results: list[{"host": ..., "ip": ...}]
+    """
     with open(f"{csv_path}domain_results.csv", "a", newline="") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow([domain, json.dumps(crawl_results)])
+
 
 def domain_already_exists(value):
     """Return True if `value` appears anywhere in the first column of csv_path."""
@@ -122,20 +185,22 @@ def index():
     result_domains = []
     submitted_domain = None
     cached = "true"  # default when checkbox is NOT checked
+    app_env = os.environ.get('APP_ENV')
+
 
     if request.method == "POST":
         submitted_domain = request.form.get("domain", "").strip()
-
-        # If checkbox is checked → cached = "false"
-        # If unchecked (no field sent) → cached = "true"
         cached = request.form.get("cached", "true")
 
         if not submitted_domain:
             flash("Please enter a domain.", "danger")
             return redirect(url_for("index"))
 
-        if get_from_redis(submitted_domain) and cached == "true":
-            result_domains = get_from_redis(submitted_domain)
+        cached_results = get_from_redis(submitted_domain)
+
+        if cached_results and cached == "true":
+            # Use cached list[{"host": ..., "ip": ...}]
+            result_domains = cached_results
         else:
             crawl_json_result = crawl(submitted_domain)
             if crawl_json_result is None:
@@ -145,7 +210,10 @@ def index():
                 if not domains:
                     flash("No domains found for the given input.", "warning")
                 else:
-                    result_domains = sorted(domains)
+                    # Resolve hostnames to IP/unresolvable
+                    resolved = resolve_hostnames(domains)
+                    result_domains = resolved
+
                     if not domain_already_exists(submitted_domain):
                         append_to_csv(submitted_domain, result_domains)
                     write_to_redis(submitted_domain, result_domains)
@@ -154,8 +222,35 @@ def index():
         "index.html",
         result_domains=result_domains,
         submitted_domain=submitted_domain,
+        app_env=app_env,
         cached=cached,
     )
+
+@app.route("/download", methods=["GET"])
+def download_csv():
+    domain = request.args.get("domain", "").strip()
+    if not domain:
+        abort(400, description="Missing domain parameter")
+
+    # Reuse the existing Redis data structure: list[{"host": ..., "ip": ...}]
+    rows = get_from_redis(domain)
+    if not rows:
+        abort(404, description="No results found for this domain")
+
+    # Build CSV in-memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["host", "ip"])
+    for entry in sorted(rows, key=lambda x: x.get("host", "")):
+        writer.writerow([entry.get("host", ""), entry.get("ip", "")])
+
+    csv_data = output.getvalue()
+    output.close()
+
+    resp = make_response(csv_data)
+    resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+    resp.headers["Content-Disposition"] = f'attachment; filename="{domain}_results.csv"'
+    return resp
 
 @app.route("/health", methods=["GET"])
 def health():

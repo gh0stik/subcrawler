@@ -31,6 +31,24 @@
       color: var(--dc-text-main);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
         Roboto, "Helvetica Neue", Arial, sans-serif;
+      position: relative; /* Added to anchor the environment tag */
+    }
+
+    /* Small Environment Tag at the very top */
+    .env-tag {
+      position: absolute;
+      top: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.65rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--dc-text-muted);
+      background: rgba(30, 41, 59, 0.5);
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      backdrop-filter: blur(4px);
     }
 
     .app-container {
@@ -261,6 +279,12 @@
   </style>
 </head>
 <body>
+
+  <!-- Minimalist Environment Display -->
+  <div class="env-tag">
+    Environment: <span class="fw-bold" style="color: var(--dc-accent);">{{ app_env }}</span>
+  </div>
+
   <div class="app-container">
     <div class="card">
       <div class="mb-4 text-center">
@@ -335,20 +359,45 @@
                 Found {{ result_domains|length }} result{{ 's' if result_domains|length != 1 else '' }}.
               </p>
             </div>
-            <div class="sort-controls">
-              <label for="sortDomains">Sort</label>
-              <select id="sortDomains" class="form-select form-select-sm sort-select">
-                <option value="asc" selected>A → Z</option>
-                <option value="desc">Z → A</option>
-              </select>
+            <div class="d-flex align-items-center gap-2">
+              <div class="sort-controls">
+                <label for="sortDomains">Sort</label>
+                <select id="sortDomains" class="form-select form-select-sm sort-select">
+                  <option value="asc" selected>A → Z</option>
+                  <option value="desc">Z → A</option>
+                </select>
+              </div>
+              {% if submitted_domain %}
+                <a
+                  href="{{ url_for('download_csv', domain=submitted_domain) }}"
+                  class="btn btn-outline-light btn-sm"
+                >
+                  Download CSV
+                </a>
+              {% endif %}
             </div>
           </div>
 
           <ul class="list-group" id="domainList">
             {% for d in result_domains %}
               <li class="list-group-item small">
-                <span>{{ d }}</span>
-                <span class="badge-domain">domain</span>
+                <div class="d-flex flex-column">
+                  <span class="fw-semibold">{{ d.host }}</span>
+                  <small class="text-muted">
+                    {% if d.ip == "unresolvable" %}
+                      unresolvable
+                    {% else %}
+                      {{ d.ip }}
+                    {% endif %}
+                  </small>
+                </div>
+                <span class="badge-domain">
+                  {% if d.ip == "unresolvable" %}
+                    unresolvable
+                  {% else %}
+                    {{ d.ip }}
+                  {% endif %}
+                </span>
               </li>
             {% endfor %}
           </ul>
