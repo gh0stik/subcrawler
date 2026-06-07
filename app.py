@@ -11,7 +11,6 @@ import io
 from flask import Flask, render_template, request, redirect, url_for, flash, abort, make_response
 
 app = Flask(__name__)
-app_port = os.environ.get("APP_PORT", 5000)
 
 def _resolve_single(host: str) -> dict:
     try:
@@ -268,6 +267,7 @@ def shutdown():
     os._exit(1)
 
 if __name__ == "__main__":
+    app_port = os.environ.get("APP_PORT")
     create_if_not_exist()
     csv_to_redis_init()
     app.run(host="0.0.0.0", port=app_port, debug=True)
