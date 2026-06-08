@@ -1,6 +1,5 @@
 import csv
 import json
-import traceback
 import redis
 import requests
 import os
@@ -8,9 +7,37 @@ import re
 import socket
 import concurrent.futures
 import io
+import logging
+from logging.handlers import RotatingFileHandler
+from werkzeug.exceptions import HTTPException
 from flask import Flask, render_template, request, redirect, url_for, flash, abort, make_response
 
 app = Flask(__name__)
+
+LOG_PATH = "/var/log/subcrawler.log"
+
+
+def setup_logger():
+    logger = logging.getLogger("subcrawler")
+    logger.setLevel(logging.INFO)
+
+    if not logger.handlers:
+        try:
+            handler = RotatingFileHandler(LOG_PATH, maxBytes=10_485_760, backupCount=3, encoding="utf-8")
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+            logger.addHandler(handler)
+        except Exception as exc:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+            logger.addHandler(console_handler)
+            logger.error("Unable to create log file %s; falling back to stdout. %s", LOG_PATH, exc)
+
+    return logger
+
+
+logger = setup_logger()
 
 def _resolve_single(host: str) -> dict:
     try:
@@ -62,11 +89,10 @@ def crawl(domain_to_crawl: str):
         response = s.get("https://crt.sh/json", params=params, timeout=120)
         if response.status_code == 200:
             return response.text
-        else:
-            print(f"crt.sh returned status {response.status_code}")
-            return None
+        logger.error("crt.sh returned status %s for %s", response.status_code, domain_to_crawl)
+        return None
     except requests.exceptions.RequestException as e:
-        print(str(e))
+        logger.exception("crt.sh request failed for %s", domain_to_crawl)
         return None
 
 DOMAIN_RE = re.compile(
@@ -78,7 +104,7 @@ def create_if_not_exist():
         with open(f"{csv_path}domain_results.csv", "x") as f:
             pass
     except FileExistsError:
-        print("The file already exists.")
+        logger.info("CSV file already exists: %sdomain_results.csv", csv_path)
 
 def is_valid_domain(name: str) -> bool:
     return DOMAIN_RE.match(name) is not None
@@ -112,11 +138,9 @@ def parse_results(json_results: str, base_domain: str):
                     if is_valid_domain(item) and "@" not in item:
                         domains.add(item)
 
-    except Exception as e:
-        error_msg = f"Exception: {str(e)}\nError stack: {traceback.format_exc()}."
-        print(error_msg)
+    except Exception:
+        logger.exception("Failed to parse crt.sh JSON output for %s", base_domain)
 
-    print(domains)
     return domains
 
 def write_to_redis(domain, crawl_results):
@@ -126,8 +150,11 @@ def write_to_redis(domain, crawl_results):
     """
     if not crawl_results:
         return
-    payloads = [json.dumps(entry, sort_keys=True) for entry in crawl_results]
-    r.sadd(domain, *payloads)
+    try:
+        payloads = [json.dumps(entry, sort_keys=True) for entry in crawl_results]
+        r.sadd(domain, *payloads)
+    except Exception:
+        logger.exception("Failed to write crawl results to Redis for %s", domain)
 
 def get_from_redis(domain):
     """
@@ -147,18 +174,21 @@ def get_from_redis(domain):
 
 
 def csv_to_redis_init():
-    print("Initializing Redis and appending crawl results...")
-    with open(f"{csv_path}domain_results.csv", "r", newline="") as csv_read:
-        reader = csv.reader(csv_read)
-        for row in reader:
-            if row:
-                domain = row[0]
-                try:
-                    data = json.loads(row[1])
-                except json.JSONDecodeError:
-                    continue
-                # data is expected to be list[{"host": ..., "ip": ...}]
-                write_to_redis(domain, data)
+    logger.info("Initializing Redis and appending crawl results...")
+    try:
+        with open(f"{csv_path}domain_results.csv", "r", newline="") as csv_read:
+            reader = csv.reader(csv_read)
+            for row in reader:
+                if row:
+                    domain = row[0]
+                    try:
+                        data = json.loads(row[1])
+                    except json.JSONDecodeError:
+                        continue
+                    # data is expected to be list[{"host": ..., "ip": ...}]
+                    write_to_redis(domain, data)
+    except Exception:
+        logger.exception("Failed to initialize Redis from CSV file %sdomain_results.csv", csv_path)
 
 def append_to_csv(domain, crawl_results):
     """
@@ -258,9 +288,21 @@ def health():
     try:
         if r.ping():
             health_status["redis"] = "Healthy"
-    except:
-        pass
+    except Exception:
+        logger.exception("Redis health check failed")
     return health_status, 200
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    if isinstance(error, HTTPException):
+        return error
+
+    safe_message = str(error) or "An unexpected error occurred."
+    logger.exception("Unhandled exception during request: %s", safe_message)
+    flash(safe_message, "danger")
+    return redirect(url_for("index"))
+
 
 @app.route("/shutdown", methods=["GET"])
 def shutdown():
